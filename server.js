@@ -18,6 +18,7 @@ import luckyrouter from './routes/luckydrawRoutes.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { setupViteFrontends } from './vite-express-handler.js';
 
 dotenv.config();
 
@@ -36,25 +37,15 @@ const limiter = rateLimit({
   message: { success: false, message: 'Too many requests, please try again later.' }
 });
 
-// Security middlewares
-app.use(limiter);
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "blob:"],
-      connectSrc: ["'self'", ...process.env.ALLOWED_ORIGINS?.split(',') || []]
-    }
-  }
-}));
+// Security middlewares - Apply only to API routes
+app.use('/api', limiter);
+app.use('/api', helmet());
 app.use(compression());
 
 // Middleware
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use(trackAPIStats);
+app.use('/api', trackAPIStats);
 
 // CORS Configuration
 app.use(cors({
@@ -84,7 +75,7 @@ if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir);
 }
 
-// API Routes
+// API Routes - Register these BEFORE frontend routes
 app.use('/api/products', propertyrouter);
 app.use('/api/users', userrouter);
 app.use('/api/forms', formrouter);
@@ -100,11 +91,7 @@ app.get('/api/status', (req, res) => {
   res.status(200).json({ status: 'OK', time: new Date().toISOString() });
 });
 
-// Serve static files from frontend builds
-app.use('/admin', express.static(path.join(__dirname, 'admin_dist')));
-app.use(express.static(path.join(__dirname, 'user_dist')));
-
-// Handle API errors
+// Handle API errors - This must come AFTER all API routes but BEFORE frontend routes
 app.use('/api', (err, req, res, next) => {
   console.error('API Error:', err);
   const statusCode = err.status || 500;
@@ -117,14 +104,12 @@ app.use('/api', (err, req, res, next) => {
   });
 });
 
-// Route handler for admin frontend
-app.get('/admin/*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'admin_dist', 'index.html'));
-});
-
-// Route handler for user frontend - must be the last route
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'user_dist', 'index.html'));
+// Setup and serve frontend applications - This must be AFTER all API routes
+setupViteFrontends(app, {
+  userDistPath: path.join(__dirname, 'user_dist'),
+  adminDistPath: path.join(__dirname, 'admin_dist'),
+  adminPathPrefix: '/admin',
+  rootDir: '' // Empty because we're providing full paths above
 });
 
 // Handle unhandled rejections
